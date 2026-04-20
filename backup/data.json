@@ -1,0 +1,45 @@
+[
+  {
+    "ticketId": "BK-EWGYHV",
+    "vehicleNumber": "ERR-TEST",
+    "entryTime": "2026-04-17T16:16:43.701Z",
+    "status": "active",
+    "paymentStatus": "pending",
+    "historyBalance": 0,
+    "otp": "1061",
+    "totalDays": 0,
+    "amount": 10,
+    "amountPaid": 0,
+    "balance": 0,
+    "totalDue": 10,
+    "exitTime": "2026-04-17T16:16:51.355Z"
+  },
+  {
+    "ticketId": "BK-961I4J",
+    "vehicleNumber": "517426",
+    "entryTime": "2026-04-17T16:26:04.831Z",
+    "status": "active",
+    "paymentStatus": "pending",
+    "historyBalance": 0,
+    "otp": "2710",
+    "totalDays": 0,
+    "amount": 10,
+    "amountPaid": 0,
+    "balance": 0,
+    "totalDue": 10,
+    "exitTime": "2026-04-17T16:26:13.620Z"
+  },
+  {
+    "ticketId": "BK-2QGX4N",
+    "vehicleNumber": "5943",
+    "entryTime": "2026-04-17T23:17:13.357Z",
+    "status": "active",
+    "paymentStatus": "pending",
+    "historyBalance": 0,
+    "otp": "5044",
+    "totalDays": 0,
+    "amount": 0,
+    "amountPaid": 0,
+    "balance": 0
+  }
+]

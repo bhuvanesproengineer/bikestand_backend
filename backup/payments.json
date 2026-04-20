@@ -1,0 +1,15 @@
+[
+  {
+    "ticketId": "BK-59CNUA",
+    "vehicleNumber": "1234",
+    "amount": 10,
+    "date": "2026-04-17T16:22:55.442Z"
+  },
+  {
+    "ticketId": "SUB-PM9LUY",
+    "vehicleNumber": "5174",
+    "amount": 500,
+    "type": "monthly_subscription",
+    "date": "2026-04-17T16:26:30.598Z"
+  }
+]

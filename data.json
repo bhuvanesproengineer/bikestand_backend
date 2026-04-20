@@ -1,0 +1,30 @@
+[
+  {
+    "ticketId": "BK-M3FMTJ",
+    "vehicleNumber": "5943",
+    "entryTime": "2026-04-17T23:29:47.647Z",
+    "status": "active",
+    "paymentStatus": "pending",
+    "historyBalance": 0,
+    "otp": "4778",
+    "totalDays": 0,
+    "amount": 10,
+    "amountPaid": 0,
+    "balance": 0,
+    "totalDue": 10,
+    "exitTime": "2026-04-17T23:32:09.348Z"
+  },
+  {
+    "ticketId": "BK-Q5BM78",
+    "vehicleNumber": "1234",
+    "entryTime": "2026-04-17T23:46:44.551Z",
+    "status": "active",
+    "paymentStatus": "pending",
+    "historyBalance": 0,
+    "otp": "4584",
+    "totalDays": 0,
+    "amount": 0,
+    "amountPaid": 0,
+    "balance": 0
+  }
+]
