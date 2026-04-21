@@ -1,32 +1,39 @@
 const express = require('express');
 const router = express.Router();
-const Vehicle = require('../models/Vehicle');
+const ActiveVehicle = require('../models/ActiveVehicle');
+const HistoryVehicle = require('../models/HistoryVehicle');
 const Settings = require('../models/Settings');
 const Subscription = require('../models/Subscription');
 const Payment = require('../models/Payment');
+
+// In-memory cache for active vehicles
+const vehicleCache = new Map();
 
 // Helper to generate Ticket ID
 const generateTicketId = () => {
   return 'BK-' + Math.random().toString(36).substring(2, 8).toUpperCase();
 };
 
+// Helper for normalizing vehicle numbers (remove spaces, uppercase)
+const normalizeVNum = (num) => num ? String(num).replace(/\s+/g, '').toUpperCase() : '';
+
 // --- SUBSCRIPTION STATUS CHECK ---
 router.get('/subscriptions/check/:vNum', async (req, res) => {
     try {
-        const vNum = req.params.vNum.toUpperCase().slice(-4);
+        const vNum = normalizeVNum(req.params.vNum).slice(-4);
         console.log(`[API] Checking status for vehicle: ${vNum}`);
 
         const sub = await Subscription.findOne({
             vehicleNumber: vNum,
             status: 'active',
             expiryDate: { $gt: new Date() }
-        }).sort({ expiryDate: -1 });
+        }).sort({ expiryDate: -1 }).select("status type startDate expiryDate").lean();
 
         if (!sub) {
             const expired = await Subscription.findOne({
                 vehicleNumber: vNum,
                 status: 'expired'
-            }).sort({ expiryDate: -1 });
+            }).sort({ expiryDate: -1 }).select("expiryDate").lean();
             
             if (expired) {
                 return res.json({ status: 'expired', expiryDate: expired.expiryDate });
@@ -51,14 +58,13 @@ router.get('/subscriptions', async (req, res) => {
     const rawSubs = await Subscription.find().sort({ createdAt: -1 });
     const now = new Date();
     
-    // Auto-Expire Logic natively hooked into the GET request
-    const subs = await Promise.all(rawSubs.map(async (sub) => {
-      if (sub.status === 'active' && new Date(sub.expiryDate) < now) {
-        sub.status = 'expired';
-        await sub.save();
-      }
-      return sub;
-    }));
+    // Bulk Auto-Expire Logic (O(1) database operation)
+    await Subscription.updateMany(
+      { status: 'active', expiryDate: { $lt: now } },
+      { $set: { status: 'expired' } }
+    );
+
+    const subs = await Subscription.find().sort({ createdAt: -1 }).lean();
 
     res.json(subs);
   } catch (error) {
@@ -82,10 +88,14 @@ router.post('/register', async (req, res) => {
     const { vehicleNumber } = req.body || {};
     if (!vehicleNumber) return res.status(400).json({ message: 'Vehicle number is required' });
 
-    const vNum = vehicleNumber.toUpperCase();
+    const vNum = normalizeVNum(vehicleNumber);
 
-    // Check if vehicle is already parked
-    const existing = await Vehicle.findOne({ vehicleNumber: vNum, status: 'active' });
+    // Check Cache first, then ActiveVehicle collection
+    let existing = vehicleCache.get(vNum);
+    if (!existing) {
+        existing = await ActiveVehicle.findOne({ vehicleNumber: vNum }).select("vehicleNumber ticketId").lean();
+    }
+      
     if (existing) {
       return res.status(400).json({ message: 'Vehicle is already inside' });
     }
@@ -95,7 +105,7 @@ router.post('/register', async (req, res) => {
     const activeSub = await Subscription.findOne({
         vehicleNumber: vNumLast4,
         expiryDate: { $gt: new Date() }
-    });
+    }).select("_id type").lean();
     
     if (activeSub) {
       return res.status(400).json({ 
@@ -103,30 +113,42 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Fetch historical balance
-    const historyBalance = await Vehicle.getHistoricalBalance(vNum);
+    // Fetch historical balance from History collection
+    const historyBalance = await HistoryVehicle.aggregate([
+        { $match: { vehicleNumber: vNum, status: 'completed', paymentStatus: 'pending' } },
+        { $group: { _id: null, total: { $sum: "$totalDue" } } }
+    ]);
+    const totalDueFromHistory = historyBalance.length > 0 ? historyBalance[0].total : 0;
 
     const ticketId = generateTicketId();
     const otp = Math.floor(1000 + Math.random() * 9000).toString(); 
 
-    const newVehicle = new Vehicle({
+    const newVehicle = new ActiveVehicle({
       ticketId,
       vehicleNumber: vNum,
       entryTime: new Date(),
-      status: 'active',
-      paymentStatus: 'pending',
-      historyBalance: historyBalance,
+      historyBalance: totalDueFromHistory,
       otp: otp
     });
 
     await newVehicle.save();
+    
+    // Update Cache
+    vehicleCache.set(vNum, { 
+        vehicleNumber: vNum, 
+        ticketId, 
+        entryTime: newVehicle.entryTime, 
+        historyBalance: totalDueFromHistory,
+        otp 
+    });
+
     res.status(201).json({ 
       success: true,
       message: 'Vehicle registered successfully', 
       ticketId,
       otp,
       entryTime: newVehicle.entryTime,
-      historyBalance: historyBalance,
+      historyBalance: totalDueFromHistory,
       vehicleNumber: vNum
     });
   } catch (error) {
@@ -141,11 +163,16 @@ router.post('/exit', async (req, res) => {
     const { vehicleNumber } = req.body || {};
     if (!vehicleNumber) return res.status(400).json({ message: 'Vehicle Number is required' });
 
-    const vNum = vehicleNumber.toUpperCase();
-    const vehicle = await Vehicle.findOne({
-      vehicleNumber: vNum,
-      status: 'active'
-    });
+    const vNum = normalizeVNum(vehicleNumber);
+    
+    // 1. Try Cache First
+    let vehicle = vehicleCache.get(vNum);
+    
+    // 2. Fallback to DB if not in cache (ActiveVehicle only)
+    if (!vehicle) {
+        vehicle = await ActiveVehicle.findOne({ vehicleNumber: vNum });
+        if (vehicle) vehicleCache.set(vNum, vehicle.toObject());
+    }
 
     if (!vehicle) return res.status(404).json({ message: 'Active vehicle session not found' });
 
@@ -156,7 +183,7 @@ router.post('/exit', async (req, res) => {
     // Find most recent subscription
     const subscription = await Subscription.findOne({
         vehicleNumber: vNumLast4
-    }).sort({ expiryDate: -1 });
+    }).sort({ expiryDate: -1 }).select("expiryDate type status startDate").lean();
 
     let subStatus = 'none';
     let isActive = false;
@@ -180,11 +207,15 @@ router.post('/exit', async (req, res) => {
 
     const totalDue = amount + (vehicle.historyBalance || 0);
 
-    // Update vehicle with calculations
-    vehicle.amount = amount;
-    vehicle.totalDue = totalDue;
-    vehicle.exitTime = currentExitTime;
-    await vehicle.save();
+    // Update Active record temporarily (to store calculation before payment)
+    const updatedVehicle = await ActiveVehicle.findOneAndUpdate(
+        { vehicleNumber: vNum },
+        { amount, totalDue, exitTime: currentExitTime },
+        { new: true }
+    ).lean();
+
+    // Update Cache
+    vehicleCache.set(vNum, updatedVehicle);
 
     res.json({
       success: true,
@@ -213,13 +244,13 @@ router.post('/exit', async (req, res) => {
   }
 });
 
-// POST /api/pay -> Process payment
+// POST /api/pay -> Process payment (Moves from Active to History)
 router.post('/pay', async (req, res) => {
   try {
     const { ticketId, amount } = req.body || {};
     if (!ticketId) return res.status(400).json({ message: 'Ticket ID is required' });
 
-    const vehicle = await Vehicle.findOne({ ticketId });
+    const vehicle = await ActiveVehicle.findOne({ ticketId });
     if (!vehicle) return res.status(404).json({ message: 'Vehicle record not found' });
 
     const finalAmount = Number(amount) || vehicle.totalDue || 0;
@@ -232,9 +263,18 @@ router.post('/pay', async (req, res) => {
     });
     await payment.save();
 
-    vehicle.status = 'completed';
-    vehicle.paymentStatus = 'paid';
-    await vehicle.save();
+    // Create History Record
+    const historyData = vehicle.toObject();
+    delete historyData._id;
+    historyData.status = 'completed';
+    historyData.paymentStatus = 'paid';
+    if (!historyData.exitTime) historyData.exitTime = new Date();
+    
+    await HistoryVehicle.create(historyData);
+
+    // Remove from Active collection and Cache
+    await ActiveVehicle.deleteOne({ ticketId });
+    vehicleCache.delete(normalizeVNum(vehicle.vehicleNumber));
 
     res.json({ success: true, message: 'Payment processed successfully', amount: finalAmount });
   } catch (error) {
@@ -253,11 +293,20 @@ router.get('/stats', async (req, res) => {
     const weeklyStartTime = settings.revenueWeeklyResetTimestamp || new Date(0);
     const monthlyStartTime = settings.revenueMonthlyResetTimestamp || new Date(0);
 
-    const activeVehicles = await Vehicle.countDocuments({ status: 'active' });
-    const todayEntries = await Vehicle.countDocuments({ entryTime: { $gte: todayStartTime } });
+    const activeVehicles = await ActiveVehicle.countDocuments();
+    const todayEntries = await ActiveVehicle.countDocuments({ entryTime: { $gte: todayStartTime } });
     
-    // optimize by fetching from the earliest of the 3 reset times, but for safety in memory fetch all then filter
-    const payments = await Payment.find();
+    // Find the earliest start time to minimize data fetched from DB
+    const minStartTime = new Date(Math.min(
+        new Date(todayStartTime).getTime(),
+        new Date(weeklyStartTime).getTime(),
+        new Date(monthlyStartTime).getTime()
+    ));
+
+    // Fetch only necessary fields for filtered revenue calculation
+    const payments = await Payment.find({ date: { $gte: minStartTime } })
+      .select("amount date")
+      .lean();
     
     const todayRevenue = payments
       .filter(p => p.date >= todayStartTime)
@@ -330,12 +379,12 @@ router.post('/subscriptions/register', async (req, res) => {
 
     console.log(`[Subscription] Registering ${passType} pass for ${vehicleNumber}`);
 
-    const vNum = vehicleNumber.toUpperCase().slice(-4);
+    const vNum = normalizeVNum(vehicleNumber).slice(-4);
     const existing = await Subscription.findOne({ 
         vehicleNumber: vNum, 
         status: 'active', 
         expiryDate: { $gt: new Date() } 
-    });
+    }).lean();
     
     if (existing) return res.status(400).json({ message: 'Active pass already exists for this vehicle' });
 

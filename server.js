@@ -5,11 +5,14 @@ const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const apiRoutes = require('./routes/api');
 const authRoutes = require('./routes/auth');
-const User = require('./models/User'); // For seeding
+const User = require('./models/User'); 
 const Vehicle = require('./models/Vehicle');
+const ActiveVehicle = require('./models/ActiveVehicle');
+const HistoryVehicle = require('./models/HistoryVehicle');
 const Settings = require('./models/Settings');
 const Subscription = require('./models/Subscription');
 const Payment = require('./models/Payment');
+const compression = require('compression');
 dotenv.config();
 
 // Connect to MongoDB (Real or Memory)
@@ -61,13 +64,44 @@ const seedAdmin = async () => {
   }
 };
 
+const runMigration = async () => {
+    try {
+        const activeCount = await ActiveVehicle.countDocuments();
+        const historyCount = await HistoryVehicle.countDocuments();
+        
+        // Only run if both new collections are empty and old exists
+        if (activeCount === 0 && historyCount === 0) {
+            const legacyVehicles = await Vehicle.find({});
+            if (legacyVehicles.length > 0) {
+                console.log('--- STARTING ONE-TIME DATABASE SPLIT MIGRATION ---');
+                for (const v of legacyVehicles) {
+                    const data = v.toObject();
+                    if (v.status === 'active') {
+                        await ActiveVehicle.create(data);
+                    } else {
+                        await HistoryVehicle.create(data);
+                    }
+                }
+                console.log(`--- MIGRATION COMPLETE: Moved ${legacyVehicles.length} records to Active/History collections ---`);
+            }
+        }
+    } catch (err) {
+        console.error('Migration error:', err);
+    }
+};
+
 const syncDataFile = path.join(__dirname, 'database_dump.json');
 
 const loadMongoData = async () => {
   if (fs.existsSync(syncDataFile)) {
     try {
       const data = JSON.parse(fs.readFileSync(syncDataFile, 'utf8'));
-      if (data.vehicles?.length) await Vehicle.insertMany(data.vehicles);
+      if (data.vehicles?.length) {
+          // If we have old-style data, migration will handle it, but for safety in memory:
+          await Vehicle.insertMany(data.vehicles);
+      }
+      if (data.activeVehicles?.length) await ActiveVehicle.insertMany(data.activeVehicles);
+      if (data.historyVehicles?.length) await HistoryVehicle.insertMany(data.historyVehicles);
       if (data.settings?.length) await Settings.insertMany(data.settings);
       if (data.subscriptions?.length) await Subscription.insertMany(data.subscriptions);
       if (data.payments?.length) await Payment.insertMany(data.payments);
@@ -81,13 +115,15 @@ const loadMongoData = async () => {
 const saveMongoData = async () => {
   if (mongoose.connection.readyState !== 1) return;
   try {
-    const vehicles = await Vehicle.find({});
+    const vehicles = await Vehicle.find({}); // Keep legacy backup
+    const activeVehicles = await ActiveVehicle.find({});
+    const historyVehicles = await HistoryVehicle.find({});
     const settings = await Settings.find({});
     const subscriptions = await Subscription.find({});
     const payments = await Payment.find({});
     
     fs.writeFileSync(syncDataFile, JSON.stringify({
-      vehicles, settings, subscriptions, payments
+      vehicles, activeVehicles, historyVehicles, settings, subscriptions, payments
     }, null, 2));
   } catch (e) {
     console.error('Error saving backup data:', e);
@@ -114,6 +150,9 @@ const connectDB = async () => {
     
     // Auto-seed admin user
     await seedAdmin();
+
+    // Run Data Migration to split collections
+    await runMigration();
 
     if (isMemory) {
         setInterval(saveMongoData, 5000); // Save every 5 seconds securely
@@ -142,6 +181,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
+app.use(compression());
 app.use(express.json());
 
 app.use('/api', apiRoutes);

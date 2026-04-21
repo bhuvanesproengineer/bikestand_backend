@@ -9,7 +9,8 @@ const SubscriptionSchema = new mongoose.Schema({
   vehicleNumber: {
     type: String,
     required: true,
-    uppercase: true
+    uppercase: true,
+    index: true
   },
   ownerName: {
     type: String,
@@ -38,6 +39,13 @@ const SubscriptionSchema = new mongoose.Schema({
     default: 'active'
   }
 }, { timestamps: true });
+
+// Pre-save hook for normalization
+SubscriptionSchema.pre('save', function() {
+    if (this.vehicleNumber) {
+        this.vehicleNumber = this.vehicleNumber.replace(/\s+/g, '').toUpperCase();
+    }
+});
 
 // Helper to check if a specific subscription is currently active
 SubscriptionSchema.methods.isActive = function() {

@@ -187,6 +187,7 @@
       "ticketId": "BK-EDJLCE",
       "vehicleNumber": "0478",
       "entryTime": "2026-04-19T23:49:37.139Z",
+      "exitTime": "2026-04-20T00:04:11.079Z",
       "status": "active",
       "paymentStatus": "pending",
       "amount": 10,
@@ -195,8 +196,7 @@
       "otp": "1464",
       "createdAt": "2026-04-19T23:49:37.140Z",
       "updatedAt": "2026-04-20T00:04:11.082Z",
-      "__v": 0,
-      "exitTime": "2026-04-20T00:04:11.079Z"
+      "__v": 0
     },
     {
       "_id": "69e56a1831f24553f52ec9ca",

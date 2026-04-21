@@ -20,7 +20,8 @@ const PaymentSchema = new mongoose.Schema({
   },
   date: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    index: true
   }
 }, { timestamps: true });
 
